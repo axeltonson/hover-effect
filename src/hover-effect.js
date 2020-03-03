@@ -2,7 +2,6 @@ import * as THREE from 'three';
 import TweenMax from 'gsap/TweenMax';
 
 export default function (opts) {
-
   var vertex = `
 varying vec2 vUv;
 void main() {
@@ -13,36 +12,44 @@ void main() {
 
   var fragment = `
 varying vec2 vUv;
-
 uniform float dispFactor;
-uniform float dpr;
 uniform sampler2D disp;
-
 uniform sampler2D texture1;
 uniform sampler2D texture2;
 uniform float angle1;
 uniform float angle2;
 uniform float intensity1;
 uniform float intensity2;
-uniform vec4 res;
-uniform vec2 parent;
-
+uniform float canvasWidth;
+uniform float canvasHeight;
+uniform float image1Width;
+uniform float image1Height;
+uniform float image2Width;
+uniform float image2Height;
 mat2 getRotM(float angle) {
   float s = sin(angle);
   float c = cos(angle);
   return mat2(c, -s, s, c);
 }
-
+// Proportion script from here: https://gist.github.com/statico/df64c5d167362ecf7b34fca0b1459a44
+vec2 addProportionToDistortedPosition(vec2 originalDistortedPos, float imgWidth, float imgHeight){
+  /* Set proportion code */
+  vec2 s = vec2(canvasWidth, canvasHeight); // Screen
+  vec2 i = vec2(imgWidth, imgHeight); // Image
+  float rs = s.x / s.y;
+  float ri = i.x / i.y;
+  vec2 new = rs < ri ? vec2(i.x * s.y / i.y, s.y) : vec2(s.x, i.y * s.x / i.x);
+  vec2 offset = (rs < ri ? vec2((new.x - s.x) / 2.0, 0.0) : vec2(0.0, (new.y - s.y) / 2.0)) / new;
+  return originalDistortedPos * s / new + offset;
+  /* End set proportion code */
+} 
 void main() {
   vec4 disp = texture2D(disp, vUv);
   vec2 dispVec = vec2(disp.r, disp.g);
-
-  vec2 uv = 0.5 * gl_FragCoord.xy / (res.xy) ;
-  vec2 myUV = (uv - vec2(0.5))*res.zw + vec2(0.5);
-
-
-  vec2 distortedPosition1 = myUV + getRotM(angle1) * dispVec * intensity1 * dispFactor;
-  vec2 distortedPosition2 = myUV + getRotM(angle2) * dispVec * intensity2 * (1.0 - dispFactor);
+  vec2 distortedPosition1 = vUv + getRotM(angle1) * dispVec * intensity1 * dispFactor;
+  vec2 distortedPosition2 = vUv + getRotM(angle2) * dispVec * intensity2 * (1.0 - dispFactor);
+  distortedPosition1 = addProportionToDistortedPosition(distortedPosition1, image1Width, image1Height);
+  distortedPosition2 = addProportionToDistortedPosition(distortedPosition2, image2Width, image2Height);
   vec4 _texture1 = texture2D(texture1, distortedPosition1);
   vec4 _texture2 = texture2D(texture2, distortedPosition2);
   gl_FragColor = mix(_texture1, _texture2, dispFactor);
@@ -63,7 +70,6 @@ void main() {
   var dispImage = opts.displacementImage;
   var image1 = opts.image1;
   var image2 = opts.image2;
-  var imagesRatio = firstDefined(opts.imagesRatio, 1.0);
   var intensity1 = firstDefined(opts.intensity1, opts.intensity, 1);
   var intensity2 = firstDefined(opts.intensity2, opts.intensity, 1);
   var commonAngle = firstDefined(opts.angle, Math.PI / 4); // 45 degrees by default, so grayscale images work correctly
@@ -102,7 +108,7 @@ void main() {
     alpha: true
   });
 
-  renderer.setPixelRatio(2.0);
+  renderer.setPixelRatio(window.devicePixelRatio);
   renderer.setClearColor(0xffffff, 0.0);
   renderer.setSize(parent.offsetWidth, parent.offsetHeight);
   parent.appendChild(renderer.domElement);
@@ -116,7 +122,7 @@ void main() {
   loader.crossOrigin = '';
 
   var disp = loader.load(dispImage, render);
-  disp.magFilter = disp.minFilter = THREE.LinearFilter;
+  disp.wrapS = disp.wrapT = THREE.RepeatWrapping;
 
   if (video) {
     var animate = function() {
@@ -167,21 +173,11 @@ void main() {
       mat.uniforms.texture1.value = texture1;
     }, false);
   } else {
-    var texture1 = loader.load(image1, render);
-    var texture2 = loader.load(image2, render);
+    var texture1 = loader.load(image1, function(texture){onTextureLoaded(texture, 1);});
+    var texture2 = loader.load(image2, function(texture){onTextureLoaded(texture, 2);});
 
     texture1.magFilter = texture2.magFilter = THREE.LinearFilter;
     texture1.minFilter = texture2.minFilter = THREE.LinearFilter;
-  }
-
-  let a1, a2;
-  var imageAspect = imagesRatio;
-  if (parent.offsetHeight / parent.offsetWidth < imageAspect) {
-    a1 = 1;
-    a2 = parent.offsetHeight / parent.offsetWidth / imageAspect;
-  } else {
-    a1 = (parent.offsetWidth / parent.offsetHeight) * imageAspect;
-    a2 = 1;
   }
 
   var mat = new THREE.ShaderMaterial({
@@ -218,13 +214,29 @@ void main() {
         type: 't',
         value: disp
       },
-      res: {
-        type: 'vec4',
-        value: new THREE.Vector4(parent.offsetWidth, parent.offsetHeight, a1, a2)
-      },
-      dpr: {
+      canvasWidth: {
         type: 'f',
-        value: window.devicePixelRatio
+        value: parent.offsetWidth
+      },
+      canvasHeight: {
+        type: 'f',
+        value: parent.offsetHeight
+      },
+      image1Width: {
+        type: 'f',
+        value: 700
+      },
+      image1Height: {
+        type: 'f',
+        value: 700
+      },
+      image2Width: {
+        type: 'f',
+        value: 700
+      },
+      image2Height: {
+        type: 'f',
+        value: 700
       }
     },
 
@@ -237,6 +249,20 @@ void main() {
   var geometry = new THREE.PlaneBufferGeometry(parent.offsetWidth, parent.offsetHeight, 1);
   var object = new THREE.Mesh(geometry, mat);
   scene.add(object);
+
+  function onTextureLoaded(texture, texturePos){
+    var imgWidth = texture.image.width;
+    var imgHeight = texture.image.height;
+    if(texturePos == 1){
+      mat.uniforms.image1Width.value = imgWidth;
+      mat.uniforms.image1Height.value = imgHeight;
+    }
+    else{
+      mat.uniforms.image2Width.value = imgWidth;
+      mat.uniforms.image2Height.value = imgHeight;
+    }
+    render();
+  }
 
   function transitionIn() {
     TweenMax.to(mat.uniforms.dispFactor, speedIn, {
@@ -264,19 +290,13 @@ void main() {
   }
 
   window.addEventListener('resize', function (e) {
-    if (parent.offsetHeight / parent.offsetWidth < imageAspect) {
-      a1 = 1;
-      a2 = parent.offsetHeight / parent.offsetWidth / imageAspect;
-    } else {
-      a1 = (parent.offsetWidth / parent.offsetHeight) * imageAspect;
-      a2 = 1;
-    }
-    object.material.uniforms.res.value = new THREE.Vector4(parent.offsetWidth, parent.offsetHeight, a1, a2);
+    mat.uniforms.canvasWidth.value = parent.offsetWidth;
+    mat.uniforms.canvasHeight.value = parent.offsetHeight;
     renderer.setSize(parent.offsetWidth, parent.offsetHeight);
-
-    render()
+    render();
   });
 
   this.next = transitionIn;
   this.previous = transitionOut;
+  renderer.setSize(parent.offsetWidth, parent.offsetHeight);
 };
